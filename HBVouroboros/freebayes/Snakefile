@@ -1,0 +1,72 @@
+import os
+import pandas as pd
+from os.path import join
+from HBVouroboros import biokit
+import snakemake
+
+configfile: snakemake.workflow.srcdir("config/config.yaml")
+
+freebayes_opts=config['freebayes_opts']
+
+sample_annotation = config['sample_annotation']
+input_fa = config['ref_genome_fa']
+ref_genome_str = '{genus} {species} ({build})'.format(
+    genus=config['ref_genome_genus'],
+    species=config['ref_genome_species'],
+    build=config['ref_genome_build'])
+    
+samples, fq1dict, fq2dict = biokit.parse_sample_annotation(sample_annotation)
+
+ref_genome_dir = "refgenome"
+rawbam_dir = "refgenome_rawbam"
+bam_dir = "refgenome_bam"
+freebayes_dir = "refgenome_freebayes"
+log_dir = "logs"
+stats_dir = "stats"
+bowtie2_index = join(ref_genome_dir, "genome_bowtie2_index")
+
+include: '../align_reads/map-fastq-snakefile'
+
+ref_genome_GenomeFaFile = join(ref_genome_dir, 'genome.fa')
+
+rule all:
+    input:
+        expand(join(freebayes_dir, "{sample}.vcf"), sample=samples)
+
+rule reference_genome_dir:
+    output:
+        gf=directory(ref_genome_dir)
+    shell:
+        "mkdir -p {reference_genome_dir}"
+
+rule reference_genome_fa:
+    input:
+        input_fa
+    output:
+        ref_genome_GenomeFaFile,
+    shell:
+        "cp -pr {input} {output}"
+        
+rule indexing_reference_genome:
+    input:
+        fa=ref_genome_GenomeFaFile
+    output:
+        bowtie2_index
+    threads: 2
+    message: "Generating bowtie2 index of the reference genome"
+    log: join(log_dir, "bowtie2-index.log") 
+    shell:
+        "touch {output}; bowtie2-build --threads {threads} {input} {output}"
+        
+rule freebayes:
+    input:
+        bam=join(bam_dir, "{sample}.sorted.bam"),
+        bai=join(bam_dir, "{sample}.sorted.bam.bai"), 
+        fa=ref_genome_GenomeFaFile
+    threads: 1
+    log: join(log_dir, "freebayes-{sample}.log")
+    output:
+        join(freebayes_dir, "{sample}.vcf")
+    shell:
+        "freebayes -f {input.fa} -b {input.bam} {freebayes_opts}"
+        " -v {output} 2>{log}"
